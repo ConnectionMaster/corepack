@@ -1,7 +1,7 @@
-import {describe, beforeEach, it, expect}                               from '@jest/globals';
 import {Filename, ppath, xfs, npath}                                    from '@yarnpkg/fslib';
 import {delimiter}                                                      from 'node:path';
 import process                                                          from 'node:process';
+import {describe, beforeEach, it, expect}                               from 'vitest';
 
 import {Engine}                                                         from '../sources/Engine';
 import {SupportedPackageManagers, SupportedPackageManagerSetWithoutNpm} from '../sources/types';
@@ -12,6 +12,7 @@ import {runCli}                                                         from './
 const engine = new Engine();
 
 beforeEach(async () => {
+  // `process.env` is reset after each tests in setupTests.js.
   process.env.COREPACK_HOME = npath.fromPortablePath(await xfs.mktempPromise());
   process.env.COREPACK_DEFAULT_TO_LATEST = `0`;
 });
@@ -21,17 +22,12 @@ describe(`EnableCommand`, () => {
     await xfs.mktempPromise(async cwd => {
       const corepackBin = await makeBin(cwd, `corepack` as Filename);
 
-      const PATH = process.env.PATH;
-      try {
-        process.env.PATH = `${npath.fromPortablePath(cwd)}${delimiter}${PATH}`;
-        await expect(runCli(cwd, [`enable`])).resolves.toMatchObject({
-          stdout: ``,
-          stderr: ``,
-          exitCode: 0,
-        });
-      } finally {
-        process.env.PATH = PATH;
-      }
+      process.env.PATH = `${npath.fromPortablePath(cwd)}${delimiter}${process.env.PATH}`;
+      await expect(runCli(cwd, [`enable`])).resolves.toMatchObject({
+        stdout: ``,
+        stderr: ``,
+        exitCode: 0,
+      });
 
       const sortedEntries = xfs.readdirPromise(cwd).then(entries => {
         return entries.sort();
@@ -73,17 +69,12 @@ describe(`EnableCommand`, () => {
     await xfs.mktempPromise(async cwd => {
       const corepackBin = await makeBin(cwd, `corepack` as Filename);
 
-      const PATH = process.env.PATH;
-      try {
-        process.env.PATH = `${npath.fromPortablePath(cwd)}${delimiter}${PATH}`;
-        await expect(runCli(cwd, [`enable`, `yarn`])).resolves.toMatchObject({
-          stdout: ``,
-          stderr: ``,
-          exitCode: 0,
-        });
-      } finally {
-        process.env.PATH = PATH;
-      }
+      process.env.PATH = `${npath.fromPortablePath(cwd)}${delimiter}${process.env.PATH}`;
+      await expect(runCli(cwd, [`enable`, `yarn`])).resolves.toMatchObject({
+        stdout: ``,
+        stderr: ``,
+        exitCode: 0,
+      });
 
       const sortedEntries = xfs.readdirPromise(cwd).then(entries => {
         return entries.sort();

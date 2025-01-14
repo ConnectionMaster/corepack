@@ -1,3 +1,6 @@
+.idea/
+.DS_Store
+
 /.yarn/*
 !/.yarn/cache
 !/.yarn/patches
@@ -10,3 +13,5 @@
 
 /shims
 /coverage
+
+/node_modules

@@ -1,55 +1,86 @@
 "use strict";
-const fs = require(`node:fs`);
 const path = require(`node:path`);
-const v8 = require(`node:v8`);
+const crypto = require(`node:crypto`);
+const SQLite3 = require(`better-sqlite3`);
 
-const nock = require(`nock`);
+const db = new SQLite3(path.join(__dirname, `nocks.db`));
+process.once(`exit`, () => {
+  db.close();
+});
 
-const getNockFile = () =>
-  path.join(
-    __dirname,
-    `nock`,
-    `${process.env.NOCK_FILE_NAME}-${process.env.RUN_CLI_ID}.dat`,
-  );
-const ACCEPTED_HEADERS = new Set([`Content-Type`, `Content-Length`]);
-function filterHeaders(headers) {
-  if (!Array.isArray(headers)) return headers;
+db.exec(`CREATE TABLE IF NOT EXISTS nocks (
+  hash BLOB PRIMARY KEY NOT NULL,
+  body BLOB NOT NULL,
+  headers BLOB NOT NULL,
+  status INTEGER NOT NULL
+)`);
 
-  const filtered = [];
-  for (let t = 0; t < headers.length; t += 2)
-    if (ACCEPTED_HEADERS.has(headers[t].toLowerCase()))
-      filtered.push(headers[t], headers[t + 1]);
 
-  return filtered;
-}
+/**
+ * @param {string | URL} input
+ * @param {RequestInit | undefined} init
+ */
+function getRequestHash(input, init) {
+  const hash = crypto.createHash(`sha256`);
+  hash.update(`${input}\0`);
 
-switch (process.env.NOCK_ENV || ``) {
-  case `record`:
-    nock.recorder.rec({
-      // eslint-disable-next-line @typescript-eslint/naming-convention
-      dont_print: true,
-      // eslint-disable-next-line @typescript-eslint/naming-convention
-      output_objects: true,
-    });
+  if (init) {
+    for (const key in init) {
+      if (init[key] === undefined) continue;
 
-    process.on(`exit`, () => {
-      const nockCallObjects = nock.recorder.play();
-      for (const req of nockCallObjects)
-        if (typeof req !== `string`)
-          req.rawHeaders = filterHeaders(req.rawHeaders);
-
-      const serialized = v8.serialize(nockCallObjects);
-      fs.mkdirSync(path.dirname(getNockFile()), {recursive: true});
-      fs.writeFileSync(getNockFile(), serialized);
-    });
-    break;
-
-  case `replay`: {
-    const data = fs.readFileSync(getNockFile());
-    const nockCallObjects = v8.deserialize(data);
-    nock.define(nockCallObjects);
-    break;
+      switch (key) {
+        case `headers`:
+          hash.update(`${JSON.stringify(Object.fromEntries(new Headers(init.headers || {})))}\0`);
+          break;
+        default:
+          throw new Error(`Hashing for "${key}" not implemented`);
+      }
+    }
   }
 
-  default:
+  return hash.digest();
+}
+
+if (process.env.NOCK_ENV === `record`) {
+  const insertNockStatement = db.prepare(`INSERT OR REPLACE INTO nocks (hash, body, headers, status) VALUES (?, ?, jsonb(?), ?)`);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const response = await realFetch(input, init);
+    const data = await response.arrayBuffer();
+
+    const minimalHeaders = new Headers();
+    for (const headerName of [`content-type`, `content-length`]) {
+      const headerValue = response.headers.get(headerName);
+      if (headerValue != null) {
+        minimalHeaders.set(headerName, headerValue);
+      }
+    }
+
+    const requestHash = getRequestHash(input, init);
+    insertNockStatement.run(
+      requestHash,
+      Buffer.from(data),
+      JSON.stringify(Object.fromEntries(minimalHeaders)),
+      response.status,
+    );
+
+    return new Response(data, {
+      status: response.status,
+      headers: minimalHeaders,
+    });
+  };
+} else if (process.env.NOCK_ENV === `replay`) {
+  const getNockStatement = db.prepare(`SELECT body, json(headers) as headers, status FROM nocks WHERE hash = ?`);
+
+  globalThis.fetch = async (input, init) => {
+    const requestHash = getRequestHash(input, init);
+
+    const mock = getNockStatement.get(requestHash);
+    if (!mock) throw new Error(`No mock found for ${input}; run the tests with NOCK_ENV=record to generate one`);
+
+    return new Response(mock.body, {
+      status: mock.status,
+      headers: JSON.parse(mock.headers),
+    });
+  };
 }
