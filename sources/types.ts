@@ -25,6 +25,7 @@ export function isSupportedPackageManager(value: string): value is SupportedPack
 export interface NpmRegistrySpec {
   type: `npm`;
   package: string;
+  bin?: string;
 }
 
 export interface UrlRegistrySpec {
@@ -47,6 +48,22 @@ export interface PackageManagerSpec {
   url: string;
   bin: BinSpec | BinList;
   registry: RegistrySpec;
+  npmRegistry?: NpmRegistrySpec;
+  commands?: {
+    use?: Array<string>;
+  };
+}
+
+export interface InstallSpec {
+  location: string;
+  bin?: BinList | BinSpec;
+  hash: string;
+}
+
+export interface DownloadSpec {
+  tmpFolder: string;
+  outputFile: string | null;
+  hash: string;
 }
 
 /**
@@ -86,6 +103,16 @@ export interface Config {
       };
     };
   };
+
+  keys: {
+    [registry: string]: Array<{
+      expires: null;
+      keyid: string;
+      keytype: string;
+      scheme: string;
+      key: string;
+    }>;
+  };
 }
 
 /**
@@ -96,7 +123,7 @@ export interface Descriptor {
   /**
      * The name of the package manager required.
      */
-  name: SupportedPackageManagers;
+  name: string;
 
   /**
      * The range of versions allowed.
@@ -111,7 +138,7 @@ export interface Locator {
   /**
      * The name of the package manager required.
      */
-  name: SupportedPackageManagers;
+  name: string;
 
   /**
      * The exact version required.

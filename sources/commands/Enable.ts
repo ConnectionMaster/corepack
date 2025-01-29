@@ -13,9 +13,9 @@ export class EnableCommand extends Command<Context> {
   ];
 
   static usage = Command.Usage({
-    description: `Add the Corepack shims to the install directories`,
+    description: `Add the Corepack shims to the install directory`,
     details: `
-      When run, this commmand will check whether the shims for the specified package managers can be found with the correct values inside the install directory. If not, or if they don't exist, they will be created.
+      When run, this command will check whether the shims for the specified package managers can be found with the correct values inside the install directory. If not, or if they don't exist, they will be created.
 
       By default it will locate the install directory by running the equivalent of \`which corepack\`, but this can be tweaked by explicitly passing the install directory via the \`--install-directory\` flag.
     `,
@@ -60,18 +60,21 @@ export class EnableCommand extends Command<Context> {
       ? SupportedPackageManagerSetWithoutNpm
       : this.names;
 
+    const allBinNames: Array<string> = [];
+
     for (const name of new Set(names)) {
       if (!isSupportedPackageManager(name))
         throw new UsageError(`Invalid package manager name '${name}'`);
 
-      for (const binName of this.context.engine.getBinariesFor(name)) {
-        if (process.platform === `win32`) {
-          await this.generateWin32Link(installDirectory, distFolder, binName);
-        } else {
-          await this.generatePosixLink(installDirectory, distFolder, binName);
-        }
-      }
+      const binNames = this.context.engine.getBinariesFor(name);
+      allBinNames.push(...binNames);
     }
+
+    const generateLink = process.platform === `win32` ?
+      (binName: string) => this.generateWin32Link(installDirectory, distFolder, binName) :
+      (binName: string) => this.generatePosixLink(installDirectory, distFolder, binName);
+
+    await Promise.all(allBinNames.map(generateLink));
   }
 
   async generatePosixLink(installDirectory: string, distFolder: string, binName: string) {
