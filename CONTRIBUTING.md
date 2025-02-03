@@ -2,7 +2,7 @@
 
 If you want to build Corepack yourself, you can build the project like this:
 
-1. Clone this repository.
+1. Clone this repository. Some restrictions on the cloning location apply to Windows users, read [Contributing on Windows](#contributing-on-windows) for more information.
 2. Run `yarn install` (or `corepack yarn install` if the global version of
    `yarn` is not provided by Corepack).
 3. Run `yarn build` (or `corepack yarn build`).
@@ -10,6 +10,38 @@ If you want to build Corepack yourself, you can build the project like this:
 The `dist/` directory now contains the corepack build and the shims.
 Call `node ./dist/corepack --help` and behold.
 You can also run the tests with `yarn test`.
+
+## Contributing on Windows
+
+If you are cloning the repo to a directory on a Microsoft Windows operating system, it is recommended to use the same drive as your Windows `HOMEDRIVE` to avoid build and other issues related to a current restriction with Yarn Plug'n'Play caching.
+
+If you are unable to use your `HOMEDRIVE`, you may be able to work around the issue by setting the environment variable `YARN_ENABLE_GLOBAL_CACHE` to `false` before running `yarn install` (or `corepack yarn install`).
+
+# Adding a new package manager
+
+New package managers can be added by editing the following files:
+
+- [`config.json`](./config.json),
+- [`.github/workflows/sync.yml`](./.github/workflows/sync.yml) that keeps pinned
+  versions up-to-date,
+- [`package.json`](./package.json) to add the new shims to the list of
+  `"publishConfig/bin"` and `"executableFiles"`,
+- [`sources/types.ts`](./sources/types.ts) to add the package manager to the
+  `SupportedPackageManagers` enum,
+- [`tests/main.test.ts`](./tests/main.test.ts) tests to ensure the added package
+  manager works as expected.
+
+Once added, the shims pertaining to new package managers won't be automatically
+enabled by `corepack enable` when called without arguments - it'll require users
+to explicitly install the relevant shims (e.g. `corepack enable mypm`). A
+separate PR adding the package manager to the default list can be opened a
+couple of months after the new package manager was introduced.
+
+Finally, this repository does not manage which package managers are distributed
+with default install of Node.js. This is managed in the
+[nodejs/node](https://github.com/nodejs/node) repository, refer to the
+[CONTRIBUTING.md](https://github.com/nodejs/node/blob/main/CONTRIBUTING.md) over
+there for more information.
 
 ## Developer's Certificate of Origin 1.1
 

@@ -1,9 +1,13 @@
-import {UsageError}                                     from 'clipanion';
-import fs                                               from 'fs';
-import path                                             from 'path';
-import semver                                           from 'semver';
+import {UsageError}                            from 'clipanion';
+import fs                                      from 'fs';
+import path                                    from 'path';
+import semverValid                             from 'semver/functions/valid';
 
-import {Descriptor, Locator, isSupportedPackageManager} from './types';
+import {PreparedPackageManagerInfo}            from './Engine';
+import * as debugUtils                         from './debugUtils';
+import {NodeError}                             from './nodeUtils';
+import * as nodeUtils                          from './nodeUtils';
+import {Descriptor, isSupportedPackageManager} from './types';
 
 const nodeModulesRegExp = /[\\/]node_modules[\\/](@[^\\/]*[\\/])?([^@\\/][^\\/]*)$/;
 
@@ -11,73 +15,67 @@ export function parseSpec(raw: unknown, source: string, {enforceExactVersion = t
   if (typeof raw !== `string`)
     throw new UsageError(`Invalid package manager specification in ${source}; expected a string`);
 
-  const match = raw.match(/^(?!_)(.+)@(.+)$/);
-  if (match === null || (enforceExactVersion && !semver.valid(match[2])))
-    throw new UsageError(`Invalid package manager specification in ${source}; expected a semver version${enforceExactVersion ? `` : `, range, or tag`}`);
+  const atIndex = raw.indexOf(`@`);
 
-  if (!isSupportedPackageManager(match[1]))
-    throw new UsageError(`Unsupported package manager specification (${match})`);
+  if (atIndex === -1 || atIndex === raw.length - 1) {
+    if (enforceExactVersion)
+      throw new UsageError(`No version specified for ${raw} in "packageManager" of ${source}`);
+
+    const name = atIndex === -1 ? raw : raw.slice(0, -1);
+    if (!isSupportedPackageManager(name))
+      throw new UsageError(`Unsupported package manager specification (${name})`);
+
+    return {
+      name, range: `*`,
+    };
+  }
+
+  const name = raw.slice(0, atIndex);
+  const range = raw.slice(atIndex + 1);
+
+  const isURL = URL.canParse(range);
+  if (!isURL) {
+    if (enforceExactVersion && !semverValid(range))
+      throw new UsageError(`Invalid package manager specification in ${source} (${raw}); expected a semver version${enforceExactVersion ? `` : `, range, or tag`}`);
+
+    if (!isSupportedPackageManager(name)) {
+      throw new UsageError(`Unsupported package manager specification (${raw})`);
+    }
+  } else if (isSupportedPackageManager(name) && process.env.COREPACK_ENABLE_UNSAFE_CUSTOM_URLS !== `1`) {
+    throw new UsageError(`Illegal use of URL for known package manager. Instead, select a specific version, or set COREPACK_ENABLE_UNSAFE_CUSTOM_URLS=1 in your environment (${raw})`);
+  }
+
 
   return {
-    name: match[1],
-    range: match[2],
+    name,
+    range,
   };
 }
 
-/**
- * Locates the active project's package manager specification.
- *
- * If the specification exists but doesn't match the active package manager,
- * an error is thrown to prevent users from using the wrong package manager,
- * which would lead to inconsistent project layouts.
- *
- * If the project doesn't include a specification file, we just assume that
- * whatever the user uses is exactly what they want to use. Since the version
- * isn't explicited, we fallback on known good versions.
- *
- * Finally, if the project doesn't exist at all, we ask the user whether they
- * want to create one in the current project. If they do, we initialize a new
- * project using the default package managers, and configure it so that we
- * don't need to ask again in the future.
- */
-export async function findProjectSpec(initialCwd: string, locator: Locator, {transparent = false}: {transparent?: boolean} = {}): Promise<Descriptor> {
-  // A locator is a valid descriptor (but not the other way around)
-  const fallbackLocator = {name: locator.name, range: locator.reference};
+export async function setLocalPackageManager(cwd: string, info: PreparedPackageManagerInfo) {
+  const lookup = await loadSpec(cwd);
 
-  if (process.env.COREPACK_ENABLE_PROJECT_SPEC === `0`)
-    return fallbackLocator;
+  const content = lookup.type !== `NoProject`
+    ? await fs.promises.readFile(lookup.target, `utf8`)
+    : ``;
 
-  if (process.env.COREPACK_ENABLE_STRICT === `0`)
-    transparent = true;
+  const {data, indent} = nodeUtils.readPackageJson(content);
 
-  while (true) {
-    const result = await loadSpec(initialCwd);
+  const previousPackageManager = data.packageManager ?? `unknown`;
+  data.packageManager = `${info.locator.name}@${info.locator.reference}`;
 
-    switch (result.type) {
-      case `NoProject`:
-      case `NoSpec`: {
-        return fallbackLocator;
-      } break;
+  const newContent = nodeUtils.normalizeLineEndings(content, `${JSON.stringify(data, null, indent)}\n`);
+  await fs.promises.writeFile(lookup.target, newContent, `utf8`);
 
-      case `Found`: {
-        if (result.spec.name !== locator.name) {
-          if (transparent) {
-            return fallbackLocator;
-          } else {
-            throw new UsageError(`This project is configured to use ${result.spec.name}`);
-          }
-        } else {
-          return result.spec;
-        }
-      } break;
-    }
-  }
+  return {
+    previousPackageManager,
+  };
 }
 
 export type LoadSpecResult =
     | {type: `NoProject`, target: string}
     | {type: `NoSpec`, target: string}
-    | {type: `Found`, spec: Descriptor};
+    | {type: `Found`, target: string, spec: Descriptor};
 
 export async function loadSpec(initialCwd: string): Promise<LoadSpecResult> {
   let nextCwd = initialCwd;
@@ -96,10 +94,14 @@ export async function loadSpec(initialCwd: string): Promise<LoadSpecResult> {
       continue;
 
     const manifestPath = path.join(currCwd, `package.json`);
-    if (!fs.existsSync(manifestPath))
-      continue;
-
-    const content = await fs.promises.readFile(manifestPath, `utf8`);
+    debugUtils.log(`Checking ${manifestPath}`);
+    let content: string;
+    try {
+      content = await fs.promises.readFile(manifestPath, `utf8`);
+    } catch (err) {
+      if ((err as NodeError)?.code === `ENOENT`) continue;
+      throw err;
+    }
 
     let data;
     try {
@@ -121,6 +123,7 @@ export async function loadSpec(initialCwd: string): Promise<LoadSpecResult> {
 
   return {
     type: `Found`,
+    target: selection.manifestPath,
     spec: parseSpec(rawPmSpec, path.relative(initialCwd, selection.manifestPath)),
   };
 }
